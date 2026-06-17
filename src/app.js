@@ -43,6 +43,10 @@ async function fetchOpenTabs() {
     const newtabUrl = browserApi.runtime.getURL('index.html');
 
     const tabs = await browserApi.tabs.query({});
+
+    // Read stored tab open times (populated by background.js)
+    const { tabOpenTimes = {} } = await browserApi.storage.local.get('tabOpenTimes');
+
     openTabs = tabs.map(t => ({
       id:       t.id,
       url:      t.url,
@@ -52,6 +56,8 @@ async function fetchOpenTabs() {
       // Flag Tab Out's own pages so we can detect duplicate new tabs
       // Chrome/Edge use chrome://newtab/, Firefox may use about:newtab
       isTabOut: t.url === newtabUrl || t.url === 'chrome://newtab/' || t.url === 'about:newtab',
+      // When this tab was opened (ISO string), or null if unknown
+      openedAt: tabOpenTimes[String(t.id)] || null,
     }));
   } catch {
     // browserApi.tabs API unavailable (shouldn't happen in an extension page)
@@ -460,7 +466,7 @@ function checkAndShowEmptyState() {
   const remaining = missionsEl.querySelectorAll('.mission-card:not(.closing)').length;
   if (remaining > 0) return;
 
-  missionsEl.innerHTML = `
+  setHTML(missionsEl, `
     <div class="missions-empty-state">
       <div class="empty-checkmark">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -470,7 +476,7 @@ function checkAndShowEmptyState() {
       <div class="empty-title">Inbox zero, but for tabs.</div>
       <div class="empty-subtitle">You're free.</div>
     </div>
-  `;
+  `);
 
   const countEl = document.getElementById('openTabsSectionCount');
   if (countEl) countEl.textContent = '0 domains';
@@ -495,6 +501,69 @@ function timeAgo(dateStr) {
   if (diffHours < 24) return diffHours + ' hr' + (diffHours !== 1 ? 's' : '') + ' ago';
   if (diffDays === 1) return 'yesterday';
   return diffDays + ' days ago';
+}
+
+/**
+ * formatOpenTime(isoStr)
+ *
+ * Converts an ISO date string into an absolute time display:
+ *   Today      → "14:30"
+ *   Yesterday  → "Yesterday 14:30"
+ *   This year  → "Jun 14, 14:30"
+ *   Past years → "Jun 14, 2025, 14:30"
+ */
+function formatOpenTime(isoStr) {
+  if (!isoStr) return '';
+  const then = new Date(isoStr);
+  const now  = new Date();
+
+  const timeStr = then.toLocaleTimeString('en-US', {
+    hour: '2-digit', minute: '2-digit', hour12: false
+  });
+
+  const sameDay =
+    then.getFullYear() === now.getFullYear() &&
+    then.getMonth()    === now.getMonth() &&
+    then.getDate()     === now.getDate();
+
+  if (sameDay) return timeStr;
+
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday =
+    then.getFullYear() === yesterday.getFullYear() &&
+    then.getMonth()    === yesterday.getMonth() &&
+    then.getDate()     === yesterday.getDate();
+
+  if (isYesterday) return 'Yesterday ' + timeStr;
+
+  const monthDay = then.toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric'
+  });
+
+  if (then.getFullYear() === now.getFullYear()) {
+    return monthDay + ', ' + timeStr;
+  }
+
+  return monthDay + ', ' + then.getFullYear() + ', ' + timeStr;
+}
+
+/**
+ * openTimeColor(isoStr)
+ *
+ * Returns a CSS class name based on how long the tab has been open:
+ *   < 1 hour       → ''                  (default color)
+ *   1–24 hours     → 'open-time-recent'  (muted)
+ *   1–7 days       → 'open-time-old'     (amber)
+ *   > 7 days       → 'open-time-stale'   (rose)
+ */
+function openTimeColor(isoStr) {
+  if (!isoStr) return '';
+  const age = Date.now() - new Date(isoStr).getTime();
+  if (age < 3600000)       return '';                // < 1h
+  if (age < 86400000)      return 'open-time-recent'; // 1–24h
+  if (age < 7 * 86400000)  return 'open-time-old';    // 1–7d
+  return 'open-time-stale';                           // > 7d
 }
 
 /**
@@ -699,6 +768,20 @@ function smartTitle(title, url) {
 
 
 /* ----------------------------------------------------------------
+   UTILITY
+   ---------------------------------------------------------------- */
+
+/**
+ * setHTML(el, html) — Safe wrapper for injecting HTML into an element.
+ * Uses DOMParser to avoid innerHTML / createContextualFragment warnings.
+ */
+function setHTML(el, html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  el.replaceChildren(...doc.body.childNodes);
+}
+
+
+/* ----------------------------------------------------------------
    SVG ICON STRINGS
    ---------------------------------------------------------------- */
 const ICONS = {
@@ -776,9 +859,15 @@ function buildOverflowChips(hiddenTabs, urlCounts = {}) {
     let domain = '';
     try { domain = new URL(tab.url).hostname; } catch {}
     const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
+    const timeHtml = tab.openedAt
+      ? `<span class="chip-open-time ${openTimeColor(tab.openedAt)}">${formatOpenTime(tab.openedAt)}</span>`
+      : '';
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
       ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
-      <span class="chip-text">${label}</span>${dupeTag}
+      <div class="chip-info">
+        <span class="chip-text">${label}</span>${dupeTag}
+        ${timeHtml}
+      </div>
       <div class="chip-actions">
         <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="Save for later">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" /></svg>
@@ -857,9 +946,15 @@ function renderDomainCard(group) {
     let domain = '';
     try { domain = new URL(tab.url).hostname; } catch {}
     const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
+    const timeHtml = tab.openedAt
+      ? `<span class="chip-open-time ${openTimeColor(tab.openedAt)}">${formatOpenTime(tab.openedAt)}</span>`
+      : '';
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
       ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
-      <span class="chip-text">${label}</span>${dupeTag}
+      <div class="chip-info">
+        <span class="chip-text">${label}</span>${dupeTag}
+        ${timeHtml}
+      </div>
       <div class="chip-actions">
         <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="Save for later">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" /></svg>
@@ -941,7 +1036,7 @@ async function renderDeferredColumn() {
     // Render active checklist items
     if (active.length > 0) {
       countEl.textContent = `${active.length} item${active.length !== 1 ? 's' : ''}`;
-      list.innerHTML = active.map(item => renderDeferredItem(item)).join('');
+      setHTML(list, active.map(item => renderDeferredItem(item)).join(''));
       list.style.display = 'block';
       empty.style.display = 'none';
     } else {
@@ -953,7 +1048,7 @@ async function renderDeferredColumn() {
     // Render archive section
     if (archived.length > 0) {
       archiveCountEl.textContent = `(${archived.length})`;
-      archiveList.innerHTML = archived.map(item => renderArchiveItem(item)).join('');
+      setHTML(archiveList, archived.map(item => renderArchiveItem(item)).join(''));
       archiveEl.style.display = 'block';
     } else {
       archiveEl.style.display = 'none';
@@ -1158,8 +1253,8 @@ async function renderStaticDashboard() {
 
   if (domainGroups.length > 0 && openTabsSection) {
     if (openTabsSectionTitle) openTabsSectionTitle.textContent = 'Open tabs';
-    openTabsSectionCount.innerHTML = `${domainGroups.length} domain${domainGroups.length !== 1 ? 's' : ''} &nbsp;&middot;&nbsp; <button class="action-btn close-tabs" data-action="close-all-open-tabs" style="font-size:11px;padding:3px 10px;">${ICONS.close} Close all ${realTabs.length} tabs</button>`;
-    openTabsMissionsEl.innerHTML = domainGroups.map(g => renderDomainCard(g)).join('');
+    setHTML(openTabsSectionCount, `${domainGroups.length} domain${domainGroups.length !== 1 ? 's' : ''} &nbsp;&middot;&nbsp; <button class="action-btn close-tabs" data-action="close-all-open-tabs" style="font-size:11px;padding:3px 10px;">${ICONS.close} Close all ${realTabs.length} tabs</button>`);
+    setHTML(openTabsMissionsEl, domainGroups.map(g => renderDomainCard(g)).join(''));
     openTabsSection.style.display = 'block';
   } else if (openTabsSection) {
     openTabsSection.style.display = 'none';
@@ -1466,7 +1561,7 @@ document.addEventListener('input', async (e) => {
 
     if (q.length < 2) {
       // Show all archived items
-      archiveList.innerHTML = archived.map(item => renderArchiveItem(item)).join('');
+      setHTML(archiveList, archived.map(item => renderArchiveItem(item)).join(''));
       return;
     }
 
@@ -1476,8 +1571,8 @@ document.addEventListener('input', async (e) => {
       (item.url  || '').toLowerCase().includes(q)
     );
 
-    archiveList.innerHTML = results.map(item => renderArchiveItem(item)).join('')
-      || '<div style="font-size:12px;color:var(--muted);padding:8px 0">No results</div>';
+    setHTML(archiveList, results.map(item => renderArchiveItem(item)).join('')
+      || '<div style="font-size:12px;color:var(--muted);padding:8px 0">No results</div>');
   } catch (err) {
     console.warn('[tab-out] Archive search failed:', err);
   }

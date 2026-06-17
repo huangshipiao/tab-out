@@ -395,6 +395,26 @@ header {
   overflow: hidden;
 }
 
+/* Wrapper for chip text + open time — vertical stack */
+.chip-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* Tab open time indicator */
+.chip-open-time {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.chip-open-time.open-time-recent { color: var(--muted); }
+.chip-open-time.open-time-old    { color: var(--accent-amber); }
+.chip-open-time.open-time-stale  { color: var(--accent-rose); }
+
 /* Duplicate badge */
 .chip-dupe-badge {
   color: var(--accent-amber);
