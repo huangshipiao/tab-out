@@ -6,3 +6,7 @@ docs/superpowers/
 
 # Personal config (landing page patterns, etc.) — never push to GitHub
 extension/config.local.js
+src/config.local.js
+
+# Build output
+dist/

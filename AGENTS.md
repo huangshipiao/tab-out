@@ -26,7 +26,7 @@ Before doing anything technical, tell the user what they're about to get:
 ## Step 1 -- Clone the repo
 
 ```bash
-git clone https://github.com/zarazhangrui/tab-out.git
+git clone https://github.com/huangshipiao/tab-out.git
 cd tab-out
 ```
 

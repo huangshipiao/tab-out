@@ -1,0 +1,17 @@
+{
+  "name": "tab-out",
+  "version": "1.0.0",
+  "description": "Cross-browser extension: new tab dashboard for managing open tabs.",
+  "private": true,
+  "scripts": {
+    "build": "node build.js all",
+    "build:chrome": "node build.js chrome",
+    "build:edge": "node build.js edge",
+    "build:firefox": "node build.js firefox",
+    "pack:chrome": "node build.js pack chrome",
+    "pack:edge": "node build.js pack edge",
+    "pack:firefox": "node build.js pack firefox"
+  },
+  "author": "huangshipiao",
+  "license": "MIT"
+}
